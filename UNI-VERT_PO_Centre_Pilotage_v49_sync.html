@@ -457,9 +457,31 @@ function loadFromSheetsGranular(cb){
   Promise.all([
     fetch(N8N_PO_STATE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get_producteurs'})}).then(function(r){return r.ok?r.json():[];}).catch(function(){return [];}),
     fetch(N8N_PO_STATE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get_enveloppes'})}).then(function(r){return r.ok?r.json():[];}).catch(function(){return [];}),
-    fetch(N8N_PO_STATE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get_depenses'})}).then(function(r){return r.ok?r.json():[];}).catch(function(){return [];})
+    fetch(N8N_PO_STATE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get_depenses'})}).then(function(r){return r.ok?r.json():[];}).catch(function(){return [];}),
+    fetch(N8N_PO_STATE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'load_state',Key:'po2026'})}).then(function(r){return r.ok?r.json():[];}).catch(function(){return [];})
   ]).then(function(results){
     var rprod=normRows(results[0]), renv=normRows(results[1]), rdep=normRows(results[2]);
+
+    // Lecture du Referentiel partagé depuis AppState
+    var serverReferentiel=null;
+    var serverRows=results[3];
+
+    if(Array.isArray(serverRows)){
+      var serverRow=serverRows.find(function(x){
+        return x.Key==='po2026'||(x.json&&x.json.Key==='po2026');
+      });
+
+      var rawServer=serverRow&&(serverRow.JSON||(serverRow.json&&serverRow.json.JSON));
+
+      if(rawServer){
+        try{
+          var serverState=JSON.parse(rawServer);
+          if(Array.isArray(serverState.referentiel)){
+            serverReferentiel=serverState.referentiel;
+          }
+        }catch(e){}
+      }
+    }
     if(!rprod.length&&!rdep.length&&!renv.length){cb(false);return;}
     var envByProd={};
     renv.forEach(function(e){if(!e.Campagne_ID||e.Campagne_ID===CAMPAGNE_ID)envByProd[idApp(e.Producteur_ID)]=parseFloat(e.Montant_enveloppe)||0;});
@@ -483,7 +505,7 @@ function loadFromSheetsGranular(cb){
       var obj={id:d.Depense_ID,prod:idApp(d.Producteur_ID),mes:d.Code_Mesure||'',des:d.Objet_depense||'',ht:ht,esc:0,escpct:0,taux:taux,paie:d.Type_paiement||'',foFixe:fo,categorie:d.Categorie_depenses||'',origine:origineFinale,actif:actif,commentaires:d.Commentaires||'',releveBancaire:(''+(d.Releve_bancaire||'')).toLowerCase()==='oui',infoProducteur:d['Info producteur']||d.Info_producteur||''};
       deps.push(obj); // toutes les lignes de l'onglet Depenses vont dans la liste "Depenses" de l'app ; "Depenses OP" reste un sujet a part, non reconstruit ici
     });
-    state={prods:prods,deps:deps,ops:ops};
+    state={prods:prods,deps:deps,ops:ops,referentiel:serverReferentiel||referentiel};
     try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
     setSyncBadge('Onglets charges : '+prods.length+' producteurs, '+deps.length+' dep., '+ops.length+' OP',true);
     cb(true);
@@ -1475,7 +1497,13 @@ function loadReferentiel(){
   try{var s=localStorage.getItem(REF_KEY);if(s){referentiel=JSON.parse(s);return;}}catch(e){}
   referentiel=JSON.parse(JSON.stringify(REFERENTIEL_DEFAULT));
 }
-function saveReferentiel(){try{localStorage.setItem(REF_KEY,JSON.stringify(referentiel));}catch(e){}}
+function saveReferentiel(){try{localStorage.setItem(REF_KEY,JSON.stringify(referentiel));}catch(e){}
+  
+  // Met à jour le Referentiel dans l'état partagé
+  if(typeof state==='object' && state){
+    state.referentiel=referentiel;syncStateToServer();
+  }
+}
 
 var CAT_COLORS={'Investissements':'#1565C0','Production / Qualite':'#2E7D32','Environnement':'#1B5E20','Commercial / Gestion':'#EF6C00','Recherche / Experimentation':'#6A1B9A','Retraits / Crises':'#C62828'};
 
