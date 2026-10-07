@@ -1130,20 +1130,56 @@ function importerQuestionnaireExcel(file){
         if(!row||!row[idxNom])continue;
         var client=(''+row[idxNom]).trim();
         var prodVal=trouverProducteurJotform(client)||'';
-        // regrouper les colonnes par (mesure, designation)
+        // Regrouper les colonnes par occurrence de depense.
+        // Une meme mesure + designation peut apparaitre plusieurs fois dans le questionnaire.
         var groups={};
+        var currentGroupByBase={};
+        var occurrenceByBase={};
+
         for(var c=0;c<headers.length;c++){
           var h=(''+(headers[c]||'')).replace(/\u00a0/g,' ');
           var m=h.match(/^([0-9.]+(?:\s*\/\s*[0-9])?)\s*:.*?>>\s*(.+?)\s*>>\s*(.+)$/);
           if(!m)continue;
-          var mesureCode=m[1].trim(), designation=m[2].trim(), champ=m[3].trim();
-          var key=mesureCode+'|'+designation;
-          if(!groups[key])groups[key]={mesure:mesureCode,designation:designation};
-          var val=row[c];
-          if(val==='' || val==null)continue;
-          groups[key][champ]=val;
+
+          var mesureCode=m[1].trim();
+          var designation=m[2].trim();
+          var champ=m[3].trim();
+          var baseKey=mesureCode+'|'+designation;
+
+          if(occurrenceByBase[baseKey]==null){
+            occurrenceByBase[baseKey]=0;
+          }
+
+          var key=currentGroupByBase[baseKey];
+
+        // Si le meme champ reapparait pour la meme mesure + designation,
+        // Jotform a commence une nouvelle occurrence de cette depense.
+        if(key && Object.prototype.hasOwnProperty.call(groups[key],champ)){
+          occurrenceByBase[baseKey]++;
+          key=null;
         }
+
+        if(!key){
+          key=baseKey+'|'+occurrenceByBase[baseKey];
+          currentGroupByBase[baseKey]=key;
+
+          groups[key]={
+            mesure:mesureCode,
+            designation:designation,
+            occurrence:occurrenceByBase[baseKey]
+          };
+        }
+
+        var val=row[c];
+        if(val==='' || val==null)continue;
+
+        groups[key][champ]=val;
+        }
+        
         var groupKeys=Object.keys(groups);
+        // Memorise les depenses deja associees a un bloc Jotform pendant cet import.
+        // Une meme depense existante ne peut pas etre reutilisee pour deux occurrences.
+        var depensesUtilisees={};
         for(var gi=0;gi<groupKeys.length;gi++){
           var g=groups[groupKeys[gi]];
           var ht=parseFloat((''+(g['Montant HT']!=null?g['Montant HT']:g['Montant HT de la dépense']!=null?g['Montant HT de la dépense']:'')).replace(',','.'))||0;
@@ -1157,12 +1193,26 @@ function importerQuestionnaireExcel(file){
           // Categorie de depenses : deduite de la mesure ET de l'objet de la depense (mots-cles), jamais
           // l'intitule complet de la mesure. Voir deduireCategorie() pour le detail des regles.
           var categorieDeduite = deduireCategorie(mesVal, g.designation);
-          // Anti-doublon : si une ligne declaree existe deja pour ce producteur + cette mesure + cette
-          // designation exacte (ex. reimport du meme questionnaire), on la met a jour plutot que d'en
-          // creer une nouvelle. Deux designations differentes sous la meme mesure restent deux lignes distinctes.
+          // Anti-doublon Jotform : plusieurs occurrences peuvent avoir le meme
+          // producteur + mesure + designation.
+          // On ne reutilise une depense existante que si le montant ET le commentaire
+          // correspondent, et une meme depense ne peut etre utilisee qu'une seule fois
+          // pendant cet import.
+          var commentaireImport=(g['Commentaires']||'').trim();
+
           var existante=state.deps.find(function(x){
-            return x.prod===prodVal && x.mes===mesVal && x.des===g.designation &&
-                   (x.origine==='declaree'||x.origine==='declaree_exclue');
+            if(x.prod!==prodVal ||
+              x.mes!==mesVal ||
+              x.des!==g.designation ||
+              (x.origine!=='declaree' && x.origine!=='declaree_exclue') ||
+              depensesUtilisees[x.id]){
+            return false;
+            }
+
+            var memeMontant=Math.abs((+x.ht||0)-ht)<0.01;
+            var memeCommentaire=(x.commentaires||'').trim()===commentaireImport;
+
+            return memeMontant && memeCommentaire;
           });
           var d=existante||{origine:'declaree'};
           d.prod=prodVal; d.mes=mesVal; d.des=g.designation; d.ht=ht; d.esc=0; d.escpct=0;
@@ -1174,6 +1224,7 @@ function importerQuestionnaireExcel(file){
           d.commentaires=g['Commentaires']||d.commentaires||'';
           if(foForf!=null)d.foFixe=foForf; else delete d.foFixe;
           if(!d.id)d.id=nextDepId();
+          depensesUtilisees[d.id]=true;
           if(!existante)state.deps.push(d);
           status.textContent='Import en cours... '+(created+aCompleter+1)+' ligne(s) traitee(s) ('+(prodVal||client)+' - '+g.designation+')';
           await syncDepenseRow(d,'declaree'); // sequentiel : on attend la confirmation avant la ligne suivante
