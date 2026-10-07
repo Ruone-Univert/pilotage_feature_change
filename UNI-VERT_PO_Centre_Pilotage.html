@@ -1064,6 +1064,50 @@ function utiliserLigneImportee(i){
   afficherLignesImportees();
   try{document.getElementById('a-prod').scrollIntoView({behavior:'smooth',block:'center'});}catch(e){}
 }
+// Normalise un nom de producteur provenant de Jotform afin de pouvoir
+// le comparer aux raisons sociales officielles, sans tenir compte
+// de la forme juridique, des articles ni de l'ordre des mots.
+function normaliserNomJotform(s){
+  return (s||'')
+    .toString()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g,' ')
+    .trim()
+    .split(/\s+/)
+    .filter(function(m){
+      return [
+        'EARL','SCEA','SCA','SARL','GAEC',
+        'LA','LE','LES','DE','DU','DES','D','L'
+      ].indexOf(m)<0;
+    })
+    .sort()
+    .join('|');
+}
+// Recherche le code interne Pilotage correspondant au nom du producteur
+// provenant de Jotform, a partir des raisons sociales officielles.
+function trouverProducteurJotform(nomJotform){
+  var cle=normaliserNomJotform(nomJotform);
+  if(!cle)return null;
+
+  var correspondances=[];
+
+  Object.keys(RAISON_SOCIALE).forEach(function(code){
+    var raison=RAISON_SOCIALE[code];
+    if(normaliserNomJotform(raison)===cle){
+      correspondances.push(code);
+    }
+  });
+
+  // Une correspondance unique est necessaire pour eviter
+  // d'attribuer une depense au mauvais producteur.
+  if(correspondances.length===1){
+    return correspondances[0];
+  }
+
+  return null;
+}
 // Import du questionnaire producteurs (export Excel Jotform, une ligne par producteur, colonnes
 // "<Mesure> : <intitule> >> <designation> >> <champ>"). Cree des depenses Origine=declaree.
 function importerQuestionnaireExcel(file){
@@ -1085,7 +1129,7 @@ function importerQuestionnaireExcel(file){
         var row=rows[r];
         if(!row||!row[idxNom])continue;
         var client=(''+row[idxNom]).trim();
-        var prodVal=trouverProducteur(client)||'';
+        var prodVal=trouverProducteurJotform(client)||'';
         // regrouper les colonnes par (mesure, designation)
         var groups={};
         for(var c=0;c<headers.length;c++){
